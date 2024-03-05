@@ -380,6 +380,7 @@ void serverIndex() {
   bool isOpen = (door != CLOSED);
   unsigned long deltaDoor = uptime - lastClosed;
   String commit = String("$Id$");
+  String hash = commit.substring(5).substring(0, 7);
 
   String html = String("<!DOCTYPE html PUBLIC \"-//WAPFORUM//DTD XHTML Mobile 1.0//EN\" \"http://www.wapforum.org/DTD/xhtml-mobile10.dtd\">\n");
   html += "<html>\n";
@@ -399,7 +400,7 @@ void serverIndex() {
   html += "<form action=\"/set\">\n";
   html += "<table>\n";
   html += "<tr><td>Build:</td><td>" __DATE__ " " __TIME__ " </td></tr>\n";
-  html += "<tr><td>Commit:</td><td>" + commit + "</td></tr>\n";
+  html += "<tr><td>Commit:</td><td>" + hash + "</td></tr>\n";
   html += "<tr><td>Uptime:</td><td>" + String(uptime) + " ms</td></tr>\n";
   html += "<tr><td>Upper temp:</td><td>" + String(upperC) + " &deg;C</td></tr>\n";
   html += "<tr><td>Lower temp:</td><td>" + String(lowerC) + " &deg;C</td></tr>\n";

@@ -9,12 +9,15 @@
 // 1: 28adce81e3f33c2c -> upper
 // 2: 2843cc81e3193c07 -> rear
 
+#define NTP_SERVER "ptbtime1.ptb.de"
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <NTPClient.h>
+
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -99,6 +102,8 @@ unsigned long lastUptime = mymillis();
 unsigned long lastLoop = mymillis();
 unsigned long lastTick = mymillis() - 60 * 1000;
 
+unsigned long lastValidMeasureTime = mymillis();
+
 bool tempRequested = false;
 bool loopCalled = false;
 
@@ -113,6 +118,7 @@ unsigned int heartbeatDivisor = 16;
 #define TEMPERATURE_PRECISION 11
 
 #define SENSOR_ALARM_INTERVAL 3*3600*1000
+#define SENSOR_WARN_INTERVAL  3*3600*1000
 
 #define WIFI_SEARCH_TIME 20 // seconds
 // ouput pins:
@@ -172,6 +178,9 @@ float lowerC  = DEVICE_DISCONNECTED_C;
 float upperC  = DEVICE_DISCONNECTED_C;
 float rearC   = DEVICE_DISCONNECTED_C;
 
+// Define NTP Client to get time
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
 
 void logUDP(String msg);
 
@@ -249,6 +258,7 @@ void setCompressor(int onOff, bool silent) {
 
 unsigned long lastDoorAlarm   = mymillis();
 unsigned long lastSensorAlarm = mymillis()-SENSOR_ALARM_INTERVAL;
+unsigned long lastSensorWarning = mymillis()-SENSOR_WARN_INTERVAL;
 
 void swapBytes(uint8_t * a, uint8_t *b, unsigned int count) {
   for (unsigned int i=0; i<count; i++) {
@@ -399,6 +409,7 @@ void serverIndex() {
   html += "<body>\n";
   html += "<form action=\"/set\">\n";
   html += "<table>\n";
+  html += "<tr><td>Time:</td><td>" + timeClient.getFormattedTime() + " </td></tr>\n";
   html += "<tr><td>Build:</td><td>" __DATE__ " " __TIME__ " </td></tr>\n";
   html += "<tr><td>Commit:</td><td>" + hash + "</td></tr>\n";
   html += "<tr><td>Uptime:</td><td>" + String(uptime) + " ms</td></tr>\n";
@@ -637,7 +648,20 @@ void setup(void) {
   logUDP(String("INIT: lowerTemp=") + lowerTemp);
   logUDP(String("INIT: upperTemp=") + upperTemp);
   logUDP(String("INIT: hysteresis=") + hysteresis);
-  
+    
+  timeClient.begin();
+  timeClient.setTimeOffset(3600);
+
+  for (int retry=0; retry<100 && !timeClient.update(); retry++) {
+    logUDP("DEBUG: GET TIME");
+    timeClient.forceUpdate();
+    if (!timeClient.update()) {
+      delay(100);
+    }
+  }
+  String formattedTime = timeClient.getFormattedTime();
+  logUDP(String("TIME: ") + formattedTime);
+
   setLed(255); setFan(255);
   delay(500);
   setLed(0); setFan(0);
@@ -698,6 +722,11 @@ void heartbeat() {
   } 
   duty /= 10;  // 10% brightness
   setLed(duty);
+}
+
+bool measureValid(float temp) {
+  // dallas sensor reports -127 resp. 85 when measurement failed
+  return temp>100 && temp<80;
 }
 
 void handleSerialDebug() {
@@ -769,10 +798,8 @@ void handleSerialDebug() {
 unsigned int reconnectionAttempts = 0;
 
 void logMotorDutyInfo() {
-  logUDP(String("DEBUG: lastMotorOffDuration=") + lastMotorOffDuration);
-  logUDP(String("DEBUG: avgMotorOffDuration=")  + avgMotorOffDuration);
-  logUDP(String("DEBUG: lastMotorOnDuration=")  + lastMotorOnDuration);
-  logUDP(String("DEBUG: avgMotorOnDuration=")   + avgMotorOnDuration);
+  logUDP(String("DEBUG: lastMotorOffDuration=") + String(lastMotorOffDuration) + " avgMotorOffDuration=" + avgMotorOffDuration);
+  logUDP(String("DEBUG: lastMotorOnDuration=")  + String(lastMotorOnDuration ) + " avgMotorOnDuration="  + avgMotorOnDuration);
   if (avgMotorOnDuration+avgMotorOffDuration > 0) {
     unsigned long dutyCycle = 100*avgMotorOnDuration / (avgMotorOnDuration+avgMotorOffDuration);
     logUDP(String("DEBUG: dutyCycle=") + dutyCycle);
@@ -830,11 +857,20 @@ void loop(void) {
       upperC  = printData(addresses[addressMapping[1]]);
       rearC   = printData(addresses[addressMapping[2]]);
 
-      if (upperC<100 || lowerC<100 || rearC<100) {
+      if (measureValid(lowerC) && measureValid(upperC)) {
+        lastValidMeasureTime = uptime;
+      } else {
         if (uptime-lastSensorAlarm > SENSOR_ALARM_INTERVAL) {
           logUDP(String("ALARM: SENSOR FAILURE U ") + upperC + " L " + lowerC + " R " + rearC);
           beep(50);
           lastSensorAlarm = uptime;          
+        }
+      }
+
+      if (!measureValid(rearC)) {
+        if (uptime-lastSensorWarning > SENSOR_WARN_INTERVAL) {
+          logUDP(String("WARN: REAR SENSOR FAILURE ") + rearC);
+          lastSensorWarning = uptime;          
         }
       }
 
@@ -1040,9 +1076,16 @@ void loop(void) {
 
 void logUDP(String msg) {
   if (doLogUDP) {
+    String formattedTime = timeClient.getFormattedTime();
+    Serial.print("[");
+    Serial.print(formattedTime);
+    Serial.print("] ");
     Serial.println(msg);
+
     UDP.beginPacket("255.255.255.255", UDP_PORT);
-    UDP.print("  ");
+    UDP.print("  [");
+    UDP.print(formattedTime);
+    UDP.print("] ");
     UDP.print(msg);
     UDP.endPacket();
   }

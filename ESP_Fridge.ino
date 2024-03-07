@@ -124,6 +124,7 @@ unsigned int heartbeatDivisor = 16;
 // ouput pins:
 // pin for fan motor
 #define PIN_FAN 2  // connected to on-board LED, must be left floating or LOW to enter flashing mode
+// checked
 
 // pin for neopixel strip
 #define PIN_PIXELS 4  // OK
@@ -132,7 +133,7 @@ unsigned int heartbeatDivisor = 16;
 #define PIN_LED 13
 
 // compressor relay
-#define PIN_RELAY 21 
+#define PIN_RELAY 21 // OK
 
 // piezo buzzer
 #define PIN_BUZZER 18  // OK
@@ -447,26 +448,73 @@ void serverIndex() {
   html += "</form>\n";
   html += "<br/><br/>\n";
   html += "<a href=\"/reset\">[RESET]</a>\n";
+  html += "<a href=\"/test.html\">[TEST]</a>\n";
   html += "\n</body>\n</html>\n";
   server.send(200, "text/html", html);
 }
 
-void serverRedirect(unsigned int seconds) {
+void serverRedirect(String msg, unsigned int seconds) {
   logUDP("DEBUG: serverRedirect");
   String html = String("<html>\n");
   html += "<head>\n";
   html += "<meta http-equiv=\"refresh\" content=\"" + String(seconds) + "; URL=/\">\n";
   html += "</head>\n";
   html += "<body style=\"font-family: verdana, arial, sans-serif; background-color: #a0ffa0;\">\n";
-  html += "<h1><center>OK</center></h1>\n";
+  html += "<h1><center>";
+  html += msg;
+  html += "OK</center></h1>\n";
   html += "</body>\n";
   html += "</html>\n";
   server.send(200, "text/html", html);
 }
 
+void serverTestpage() {
+
+  String confirm = server.arg(0);
+  if (confirm!="confirm") {
+    serverRedirect("NO CONFIRM", 5);
+    return;
+  }
+
+  String html = String("<!DOCTYPE html PUBLIC \"-//WAPFORUM//DTD XHTML Mobile 1.0//EN\" \"http://www.wapforum.org/DTD/xhtml-mobile10.dtd\">\n");
+  html += "<html>\n";
+  html += "<head>\n";
+  html += "</head>\n";
+  html += "<body>\n";
+  html += "<form action=\"/test\">\n";
+  html += String("T_UPPER_HI: ") + T_UPPER_HI;
+  html += "<br/>\n";
+  html += String("T_UPPER_LO: ") + T_UPPER_LO;
+  html += "<br/>\n";
+  html += String("T_LOWER_HI: ") + T_LOWER_HI;
+  html += "<br/>\n";
+  html += String("T_LOWER_HI: ") + T_LOWER_HI;
+  html += "<br/>\n";
+  html += "confirm: <input type=\"text\" name=\"confirm\">\n";
+  html += "<input type=\"submit\" name=\"CON\"  value=\"FON\">\n";
+  html += "<input type=\"submit\" name=\"COFF\" value=\"FOFF\">\n";
+  html += "<input type=\"submit\" name=\"FON\"  value=\"CON\">\n";
+  html += "<input type=\"submit\" name=\"FOFF\" value=\"COFF\">\n";
+  html += "</form><br/><br/>\n";
+  html += "<a href=\"/\">[BACK]</a>\n";
+  html += "</body>\n";
+  html += "</html>\n";
+
+  String submit  = server.arg(1);
+  if (submit=="FON") {
+    setFan(255);
+  } else if (submit=="FOFF") {
+    setFan(0);
+  } else if (submit=="CON") {      
+    setCompressor(0, false);
+  } else if (submit=="COFF") {      
+    setCompressor(1, false);
+  }
+}
+
 void serverReset() {
   logUDP("DEBUG: serverReset");
-  serverRedirect(5);
+  serverRedirect("OK", 5);
   logUDP("ACTION: SERVER RESET");
   beep(30);
   ESP.restart();
@@ -493,7 +541,7 @@ void serverSet() {
 
   logUDP(String("SERVER: LOWER [") + T_LOWER_LO + ", " + T_LOWER_HI + "]");
   logUDP(String("SERVER: UPPER [") + T_UPPER_LO + ", " + T_UPPER_HI + "]");
-  serverRedirect(2);
+  serverRedirect("OK", 2);
   beep(30);
 }
 
@@ -547,10 +595,11 @@ void handleManifest() {
 }
 
 void setupWebserver() {
-  server. on("/", serverIndex);
-  server. on("/index.html", serverIndex);
-  server. on("/set", serverSet);
-  server. on("/reset", serverReset);
+  server.on("/", serverIndex);
+  server.on("/index.html", serverIndex);
+  server.on("/test.html", serverTestpage);
+  server.on("/set", serverSet);
+  server.on("/reset", serverReset);
 
   server.on("/manifest.json", handleManifest);
   server.on("/favicon.ico",   handleFavicon);
@@ -929,7 +978,7 @@ void loop(void) {
   unsigned long deltaM = uptime - lastMotorOff;
   bool isWaiting = deltaM < MOTOR_MIN_OFF_TIME;
 
-  if (lowerC > T_LOWER_LO) {
+  if (lowerC > T_LOWER_HI) {
     if (!isWaiting) {
       if (!comprActive) {
         logUDP(String("ACTION: ACTIVATE COMPRESSOR ") + lowerC + ">" + T_LOWER_HI + " WAITED: " + deltaM + "/" + MOTOR_MIN_OFF_TIME);

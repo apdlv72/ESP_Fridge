@@ -408,6 +408,7 @@ void serverIndex() {
   html += "</style>";
   html += "</head>\n";
   html += "<body>\n";
+  html += "<center><img src=\"fridge192.png\" border=\"0\"></center>\n";
   html += "<form action=\"/set\">\n";
   html += "<table>\n";
   html += "<tr><td>Time:</td><td>" + timeClient.getFormattedTime() + " </td></tr>\n";
@@ -447,77 +448,93 @@ void serverIndex() {
   html += "</table>\n";
   html += "</form>\n";
   html += "<br/><br/>\n";
-  html += "<a href=\"/reset\">[RESET]</a>\n";
   html += "<a href=\"/test.html\">[TEST]</a>\n";
   html += "\n</body>\n</html>\n";
   server.send(200, "text/html", html);
 }
 
-void serverRedirect(String msg, unsigned int seconds) {
+void serverRedirect(String msg, String url, unsigned int seconds) {
   logUDP("DEBUG: serverRedirect");
   String html = String("<html>\n");
   html += "<head>\n";
-  html += "<meta http-equiv=\"refresh\" content=\"" + String(seconds) + "; URL=/\">\n";
+  html += "<meta http-equiv=\"refresh\" content=\"" + String(seconds) + "; URL=" + url + "\">\n";
   html += "</head>\n";
-  html += "<body style=\"font-family: verdana, arial, sans-serif; background-color: #a0ffa0;\">\n";
-  html += "<h1><center>";
+  html += "<body style=\"font-family: verdana, arial, sans-serif; background-color: #a0ffa0; font-size: 48px;\">\n";
+  html += "<center><h1><br/><br/><br/>";
   html += msg;
-  html += "OK</center></h1>\n";
+  html += "</h1></center>\n";
   html += "</body>\n";
   html += "</html>\n";
   server.send(200, "text/html", html);
 }
 
-void serverTestpage() {
+void serverTestaction() {
 
   String confirm = server.arg(0);
   if (confirm!="confirm") {
-    serverRedirect("NO CONFIRM", 5);
+    serverRedirect("NO CONFIRM", "/test.html", 3);
     return;
   }
 
+  String submit = server.arg(1);
+  logUDP(String("TEST: ") + submit);
+  beep(30);
+
+  if (submit=="RST") {
+    logUDP("DEBUG: serverReset");
+    serverRedirect("RESET", "/test.html", 10);
+    ESP.restart();
+  } else if (submit=="FON") {
+    setFan(255);
+    serverRedirect("FAN 100%", "/test.html", 3);
+  } else if (submit=="FOFF") {
+    setFan(0);
+    serverRedirect("FAN 0%", "/test.html", 3);
+  } else if (submit=="CON") {      
+    setCompressor(1, false);
+    serverRedirect("COMPRESSOR ON", "/test.html", 3);
+  } else if (submit=="COFF") {      
+    setCompressor(0, false);
+    serverRedirect("COMPRESSOR OFF", "/test.html", 3);
+  } else {
+    serverRedirect(String("UNKNOWN ACTION ") + submit, "/test.html", 5);
+  }
+}
+
+void serverTestpage() {
   String html = String("<!DOCTYPE html PUBLIC \"-//WAPFORUM//DTD XHTML Mobile 1.0//EN\" \"http://www.wapforum.org/DTD/xhtml-mobile10.dtd\">\n");
   html += "<html>\n";
   html += "<head>\n";
+  html += "<title>Fridge Test</title>\n";
+  html += "<style type=\"text/css\">\n";
+  html += "body { font-family: verdana, arial, sans-serif; background-color: #a0a0ff; }";
+  html += "</style>";
   html += "</head>\n";
   html += "<body>\n";
-  html += "<form action=\"/test\">\n";
-  html += String("T_UPPER_HI: ") + T_UPPER_HI;
-  html += "<br/>\n";
-  html += String("T_UPPER_LO: ") + T_UPPER_LO;
-  html += "<br/>\n";
-  html += String("T_LOWER_HI: ") + T_LOWER_HI;
-  html += "<br/>\n";
-  html += String("T_LOWER_HI: ") + T_LOWER_HI;
-  html += "<br/>\n";
-  html += "confirm: <input type=\"text\" name=\"confirm\">\n";
+  html += "<h1>TEST PAGE</h1>\n";
+  html += "<form action=\"/testaction\">\n";
+  html += "<table>\n";
+  html += String("<tr><td>T_UPPER_HI: </td><td>") + T_UPPER_HI;
+  html += "</td></tr>\n";
+  html += String("<tr><td>T_UPPER_LO: </td><td>") + T_UPPER_LO;
+  html += "</td></tr>\n";
+  html += String("<tr><td>T_LOWER_HI: </td><td>") + T_LOWER_HI;
+  html += "</td></tr>\n";
+  html += String("<tr><td>T_LOWER_LO: </td><td>") + T_LOWER_LO;
+  html += "</td></tr>\n";
+  html += "</table>\n";
+  html += "<br/><br/>\n";
+  html += "confirm: <input type=\"text\" name=\"confirm\"><br/><br/>\n";
+  html += "<input type=\"submit\" name=\"RST\"  value=\"RST\">\n";
   html += "<input type=\"submit\" name=\"CON\"  value=\"FON\">\n";
   html += "<input type=\"submit\" name=\"COFF\" value=\"FOFF\">\n";
   html += "<input type=\"submit\" name=\"FON\"  value=\"CON\">\n";
   html += "<input type=\"submit\" name=\"FOFF\" value=\"COFF\">\n";
   html += "</form><br/><br/>\n";
-  html += "<a href=\"/\">[BACK]</a>\n";
+  html += "<a href=\"/index.html\">[BACK]</a>\n";
   html += "</body>\n";
   html += "</html>\n";
-
-  String submit  = server.arg(1);
-  if (submit=="FON") {
-    setFan(255);
-  } else if (submit=="FOFF") {
-    setFan(0);
-  } else if (submit=="CON") {      
-    setCompressor(0, false);
-  } else if (submit=="COFF") {      
-    setCompressor(1, false);
-  }
-}
-
-void serverReset() {
-  logUDP("DEBUG: serverReset");
-  serverRedirect("OK", 5);
-  logUDP("ACTION: SERVER RESET");
-  beep(30);
-  ESP.restart();
+  server.send(200, "text/html", html);
 }
 
 void serverSet() {
@@ -541,7 +558,7 @@ void serverSet() {
 
   logUDP(String("SERVER: LOWER [") + T_LOWER_LO + ", " + T_LOWER_HI + "]");
   logUDP(String("SERVER: UPPER [") + T_UPPER_LO + ", " + T_UPPER_HI + "]");
-  serverRedirect("OK", 2);
+  serverRedirect("OK", "/", 2);
   beep(30);
 }
 
@@ -597,13 +614,13 @@ void handleManifest() {
 void setupWebserver() {
   server.on("/", serverIndex);
   server.on("/index.html", serverIndex);
-  server.on("/test.html", serverTestpage);
   server.on("/set", serverSet);
-  server.on("/reset", serverReset);
+
+  server.on("/test.html", serverTestpage);
+  server.on("/testaction", serverTestaction);
 
   server.on("/manifest.json", handleManifest);
   server.on("/favicon.ico",   handleFavicon);
-  // server.on("/fridge72.png",  handleHomeIcon72);
   server.on("/fridge192.png", handleHomeIcon192);
 
   server.onNotFound(handleNotFound);

@@ -1,23 +1,16 @@
-//real:
-
-//rear:  2843cc81e3193c07
-//lower: 28d75181e3693c87
-//upper: 28adce81e3f33c2c
-
-
-// 0: 28d75181e3693c87 -> lower 
-// 1: 28adce81e3f33c2c -> upper
-// 2: 2843cc81e3193c07 -> rear
-
-#define NTP_SERVER "ptbtime1.ptb.de"
-
+#include <Adafruit_NeoPixel.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <WebServer.h>
 #include <Preferences.h>
-#include <NTPClient.h>
 
+
+// for ESP32, NTP should work witkput any lib.
+// check: https://werner.rothschopf.net/microcontroller/202103_arduino_esp32_ntp_en.htm
+#include <NTPClient.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -31,96 +24,40 @@
 #define WIFI_PASS "your_secret"
 #endif
 
+#define KEY_WIFI_SSID     "wifiSsid"
+#define KEY_WIFI_PASSWORD "wifiPassword"
+#define KEY_WIFI_BSSID    "wifiBssid"
+//#define KEY_WIFI_CHANNEL  "wifiChannel"
+
 #define UDP_PORT 4221
-
-// Include the libraries we need
-#include <Adafruit_NeoPixel.h>
-#include <OneWire.h>
-#include <DallasTemperature.h>
-
-#define DOOR_OPEN_WARN_TIME  60 * 1000  // 1 minute
-#define DOOR_OPEN_ALARM_TIME 90 * 1000  // 1 minute
-#define DOOR_OPENED_BEEP_TIME 20
-
-#define COMPRESSOR_BEEP_ALWAYS
-#define COMPRESSOR_ON_BEEP_TIME  20
-#define COMPRESSOR_OFF_BEEP_TIME 10
-
-const char FAVICON_ICO[] PROGMEM =
-#include "favicon.ico.h"
-;
-
-// const char FRIDGE72_PNG[] PROGMEM =
-// #include "fridge72.png.h"
-// ;
-
-const char FRIDGE192_PNG[] PROGMEM =
-#include "fridge192.png.h"
-;
-
-const char MANIFEST_JSON[] PROGMEM =
-#include "manifest.json.h"
-;
-
-// prototype
-unsigned long mymillis();
-
-bool compressorWasOnAtLeastOnce = false;
-
-float T_UPPER_HI = 22.9;
-float T_UPPER_LO = 22.7;
-
-float T_LOWER_HI = 22.0;
-float T_LOWER_LO = 21.7;
-
-float lowerTemp = 3;
-float upperTemp = 8;
-float hysteresis = 2;
-
-bool comprRequired = false;
-bool comprActive = false;
-
-unsigned int lastDutyCycle = 0;
-
-bool wasClosed = 1;
-long lastClosed = mymillis();
-long lastTemp = mymillis() - 10000;
-
-#define OPENED 1
-#define CLOSED 0
-
-int fanDuty = 255;
-
-unsigned long lastMotorOff = mymillis();
-unsigned long lastMotorOn = 0;
-unsigned long lastMotorOffDuration = 0;
-unsigned long lastMotorOnDuration = 0;
-unsigned long avgMotorOnDuration = 0;
-unsigned long avgMotorOffDuration = 0;
-
-unsigned long lastUptime = mymillis();
-unsigned long lastLoop = mymillis();
-unsigned long lastTick = mymillis() - 60 * 1000;
-
-unsigned long lastValidMeasureTime = mymillis();
-
-bool tempRequested = false;
-bool loopCalled = false;
-
-unsigned int heartbeatDivisor = 16;
 
 #define SECONDS 1000 // millis
 #define MINUTES (60*SECONDS)
+#define HOURS   (60*MINUTES)
 
-#define MOTOR_MIN_OFF_TIME (5 * MINUTES)
+#define TEMPERATURE_UPDATE_INTERVALL ( 1 * MINUTES)
+#define HEARTBEAT_TICK_INTERVAL      (60 * SECONDS)
+#define SENSOR_ALARM_INTERVAL        ( 3 * HOURS)
+#define SENSOR_WARN_INTERVAL         ( 1 * HOURS)
+#define CONNECTION_CHECK_INTERVAL    ( 5 * MINUTES)
+
+#define DOOR_OPEN_WARN_TIME          (60 * SECONDS)
+#define DOOR_OPEN_ALARM_TIME         (90 * SECONDS)
+#define DOOR_OPENED_BEEP_TIME         10
+
+// compressor must not be activated for at least a couple of minutes after 
+// it was deactivated.
+#define MOTOR_MIN_OFF_TIME           (15 * MINUTES)
+#define COMPRESSOR_BEEP_ALWAYS
+#define COMPRESSOR_ON_BEEP_TIME       20
+#define COMPRESSOR_OFF_BEEP_TIME      10
+
 
 #define PIN_SENSORS 5
 #define TEMPERATURE_PRECISION 11
 
-#define SENSOR_ALARM_INTERVAL 3*3600*1000
-#define SENSOR_WARN_INTERVAL  3*3600*1000
-
 #define WIFI_SEARCH_TIME 20 // seconds
+
 // ouput pins:
 // pin for fan motor
 #define PIN_FAN 2  // connected to on-board LED, must be left floating or LOW to enter flashing mode
@@ -141,10 +78,71 @@ unsigned int heartbeatDivisor = 16;
 // reed sensor for door
 #define PIN_DOOR 23  // OK
 
-
 // How many NeoPixels are attached to the Arduino?
 //#define NUMPIXELS    16 // test strip
 #define NUMPIXELS 27  // fridge
+
+#define OPENED 1
+#define CLOSED 0
+
+#define PWM_CHANNEL       0
+#define PWM_CHANNEL2      1
+#define PWM_FREQ       8000
+#define PWM_RESOLUTION    8
+// minimum duty cycle that will make fan start spinning at low speed
+#define PWM_MIN_CYCLE   120
+
+// prototype
+unsigned long mymillis();
+long reboots;
+
+bool compressorWasOnAtLeastOnce = false;
+
+float T_UPPER_HI = 22.9;
+float T_UPPER_LO = 22.7;
+
+float T_LOWER_HI = 22.0;
+float T_LOWER_LO = 21.7;
+
+float lowerTemp = 3;
+float upperTemp = 8;
+float hysteresis = 2;
+
+bool comprRequired = false;
+bool comprActive = false;
+
+unsigned int lastDutyCycle = 0;
+
+bool wasDoorClosed = 1;
+long lastClosed = mymillis();
+long lastTemperatureMeasurementTime = mymillis() - TEMPERATURE_UPDATE_INTERVALL - 10;
+
+int fanDuty = -1;
+
+unsigned long lastMotorOffTime = mymillis();
+unsigned long lastMotorOnTime = 0;
+unsigned long lastMotorOffDuration = 0;
+unsigned long lastMotorOnDuration = 0;
+unsigned long avgMotorOnDuration = 0;
+unsigned long avgMotorOffDuration = 0;
+
+unsigned long lastStatusLogged = mymillis();
+unsigned long lastLoop = mymillis();
+unsigned long lastTickTime = mymillis() - HEARTBEAT_TICK_INTERVAL;
+
+unsigned long lastDoorAlarm   = mymillis();
+unsigned long lastSensorAlarm = mymillis()-SENSOR_ALARM_INTERVAL;
+unsigned long lastSensorWarning = mymillis()-SENSOR_WARN_INTERVAL;
+
+unsigned long lastValidMeasureTime = mymillis();
+
+unsigned long lastWifiSetup = mymillis();
+unsigned int reconnectionAttempts = 0;
+
+bool tempRequested = false;
+bool loopCalled = false;
+
+unsigned int heartbeatDivisor = 16;
 
 Preferences preferences;
 
@@ -167,13 +165,11 @@ DallasTemperature sensors(&oneWire);
 // DeviceAddress lowerSensor   = { 0x28, 0x3F, 0x1C, 0x31, 0x2, 0x0, 0x0, 0x2 };
 DeviceAddress addresses[3]; //upperSensor, lowerSensor, rearSensor;
 
-int addressMapping[3] = { 0, 1, 2};
-
-volatile bool otaOngoing = false;
-int lastOtaPercent = -1;
+// TODO put sensor mapping into preferences
+int addressMapping[3] = { 0, 1, 2 };
 
 bool doLogUDP = true;
-WiFiUDP UDP;
+WiFiUDP loggingUDP;
 
 float lowerC  = DEVICE_DISCONNECTED_C;
 float upperC  = DEVICE_DISCONNECTED_C;
@@ -183,7 +179,16 @@ float rearC   = DEVICE_DISCONNECTED_C;
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
+String startTime = "?";
+
 void logUDP(String msg);
+
+bool isDevel() {
+  String id = String(ESP.getEfuseMac());
+  bool devel = id=="123538736685432";
+  logUDP(String("CHIPID: ") + id + String(" DEVEL " ) + devel);
+  return devel;
+}
 
 // use this method instead of millis() to allow testing if rollover is handled correctly
 unsigned long mymillis() {
@@ -191,42 +196,6 @@ unsigned long mymillis() {
   //now-=60*1000;
   return now;
 }
-
-void handleOTAStart() {
-  logUDP("OTA: START");
-  logUDP("ACTION: UDP OFF");
-  UDP.stop();
-  setCompressor(0, false);
-  setLed(255);
-  setFan(0);
-  otaOngoing = true;
-}
-
-void handleOTAProgress(unsigned int progress, unsigned int total) {
-  int percent = (progress / (total / 100));
-  if (percent != lastOtaPercent) {
-    // UDP is off here
-    Serial.printf("OTA: %u%%\n", percent);
-    int state = percent % 5;
-    digitalWrite(PIN_BUZZER, state == 0 ? LOW : HIGH);    
-  } else {
-    digitalWrite(PIN_BUZZER, HIGH);    
-  }
-  setLed(progress%255);  
-  lastOtaPercent = percent;
-}
-
-void handleOTAEnd() {
-  otaOngoing = false;
-  Serial.println("OTA: DONE");
-  ESP.restart();
-}
-
-unsigned int PWM_CHANNEL = 0;
-unsigned int PWM_CHANNEL2 = 1;
-unsigned int PWM_FREQ = 8000;
-unsigned int PWM_RESOLUTION = 8; // bit
-unsigned int PWM_MIN_CYCLE = 120;
 
 void setFan(int dutyCycle) {
   lastDutyCycle = dutyCycle;
@@ -257,374 +226,150 @@ void setCompressor(int onOff, bool silent) {
   }
 }
 
-unsigned long lastDoorAlarm   = mymillis();
-unsigned long lastSensorAlarm = mymillis()-SENSOR_ALARM_INTERVAL;
-unsigned long lastSensorWarning = mymillis()-SENSOR_WARN_INTERVAL;
+#include "ota.h"
+#include "wifi.h"
+#include "webserver.h"
+#include "sensors.h"
+#include "serial.h"
 
-void swapBytes(uint8_t * a, uint8_t *b, unsigned int count) {
-  for (unsigned int i=0; i<count; i++) {
-    uint8_t c = *a;
-    *a = *b;
-    *b = c;
-    a++;
-    b++;
-  }
-}
-
-void setupSensors() {
-  sensors.begin();
-
-  // locate devices on the bus
-  logUDP(String("SENSORS: FOUND ") + sensors.getDeviceCount() + " DEVICES");
-
-  // report parasite power requirements
-  logUDP(String("PARSITE: ") + (sensors.isParasitePowerMode() ? "ON" : "OFF"));
-
-  // Search for devices on the bus and assign based on an index. Ideally,
-  // you would do this to initially discover addresses on the bus and then
-  // use those addresses and manually assign them (see above) once you know
-  // the devices on your bus (and assuming they don't change).
-  //
-  // method 1: by index
-  if (!sensors.getAddress(addresses[0], 0)) {
-    logUDP("ERROR: DEVICE 0 NO ADDR");
-    bzero(addresses[0], sizeof(addresses[0]));
-  }
-  if (!sensors.getAddress(addresses[1], 1)) {
-    logUDP("ERROR: DEVICE 1 NO ADDR");
-    bzero(addresses[1], sizeof(addresses[1]));
-  }
-  if (!sensors.getAddress(addresses[2],  2)) {
-    logUDP("ERROR: DEVICE 2 NO ADDR");
-    bzero(addresses[2], sizeof(addresses[2]));
-  }
-
-  // set the resolution to x bit per device
-  sensors.setResolution(addresses[0], TEMPERATURE_PRECISION);
-  sensors.setResolution(addresses[1], TEMPERATURE_PRECISION);
-  sensors.setResolution(addresses[2], TEMPERATURE_PRECISION);
-
-  // sort device addresses in descending order (highest first) so empty addresses 
-  const int size = sizeof(DeviceAddress);
-  if (memcmp(addresses[0],  addresses[1], size) < 0) {
-    swapBytes(addresses[0], addresses[1], size);
-  }
-  if (memcmp(addresses[1],  addresses[2], size) < 0) {
-    swapBytes(addresses[1], addresses[2], size);
-  }
-  if (memcmp(addresses[0],  addresses[1], size) < 0) {
-    swapBytes(addresses[0], addresses[1], size);
-  }
-  
-  // show the addresses we found on the bus
-  logUDP(String("SENSORS: 0: ADDR: ") + formatAddress(addresses[0]) + " PREC: " + sensors.getResolution(addresses[0]));
-  logUDP(String("SENSORS: 1: ADDR: ") + formatAddress(addresses[1]) + " PREC: " + sensors.getResolution(addresses[1]));
-  logUDP(String("SENSORS: 2: ADDR: ") + formatAddress(addresses[2]) + " PREC: " + sensors.getResolution(addresses[2]));
-}
-
-unsigned long lastWifiSetup = mymillis();
-
-void setupWifi() {
-  // https://randomnerdtutorials.com/esp32-set-custom-hostname-arduino/
-  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
-  WiFi.setHostname("ESP32_Fridge");
-
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.println("WIFI: CONNECTING");
-
+void beep(long ms) {
   digitalWrite(PIN_BUZZER, LOW);
-  delay(100);
-  for (int retries = 0; WiFi.status() != WL_CONNECTED && retries < 10*WIFI_SEARCH_TIME; retries++) {
-    setLed(0);
-    digitalWrite(PIN_BUZZER, LOW);
-    delay(10);
-
-    setLed(255);
-    digitalWrite(PIN_BUZZER, HIGH);
-    delay(90);
-
-    int interval = retries % (2*NUMPIXELS); // 0, ..., 23
-    int index = (interval<NUMPIXELS) ? interval : 2*NUMPIXELS-1-interval;
-    pixels.clear();
-    pixels.setPixelColor(constrain(index, 0, NUMPIXELS-1), pixels.Color(0, 0, 255));
-    pixels.show();
-  }
-  setLed(0);
+  delay(ms);
   digitalWrite(PIN_BUZZER, HIGH);
+}
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WIFI: FAILED");
-    pixels.clear();
-    for (int i=0; i<NUMPIXELS; i++) {
-      pixels.setPixelColor(constrain(i, 0, NUMPIXELS-1), pixels.Color(20, 0, 0));
-    }
-    pixels.show();
-    digitalWrite(PIN_BUZZER, LOW);
-    delay(1000);
-    digitalWrite(PIN_BUZZER, HIGH);
-    //ESP.restart();
+void heartbeat() {
+  bool disconnected = (WiFi.status() != WL_CONNECTED);
+  if (disconnected) {
+    heartbeatDivisor = comprActive ? 1 : 2;
   } else {
-    for (int i = 0; i < 3; i++) {
-      setLed(16); digitalWrite(PIN_BUZZER, LOW);
-      delay(100);
-      setLed(0); digitalWrite(PIN_BUZZER, HIGH);
-      delay(100);
-    }
+    heartbeatDivisor = comprActive ? 8 : 16;
   }
-  lastWifiSetup = mymillis();
-}
 
-WebServer server(80);
-
-void handleNotFound() {
-  logUDP("DEBUG: handleNotFound");
-  server.send(404, "text/plain", "File Not Found\n\n");
-}
-
-void serverIndex() {
-  logUDP("DEBUG: serverIndex");
   unsigned long uptime = mymillis();
-
-  unsigned long motorOnTime = uptime-lastMotorOn;
-
-  int door = digitalRead(PIN_DOOR);
-  bool isOpen = (door != CLOSED);
-  unsigned long deltaDoor = uptime - lastClosed;
-  String commit = String("$Id$");
-  String hash = commit.substring(5).substring(0, 7);
-
-  String html = String("<!DOCTYPE html PUBLIC \"-//WAPFORUM//DTD XHTML Mobile 1.0//EN\" \"http://www.wapforum.org/DTD/xhtml-mobile10.dtd\">\n");
-  html += "<html>\n";
-  html += "<head>\n";
-  // https://developer.chrome.com/multidevice/android/installtohomescreen
-  html += "<meta charset='utf-8'>\n";
-  html += "<meta name=\"viewport\" content=\"width=device-width\">\n";
-  html += "<meta name=\"mobile-web-app-capable\" content=\"yes\">\n";
-  html += "<link rel=\"shortcut icon\" type=\"image/x-icon\" href=\"/favicon.ico\">\n";
-  html += "<link rel=\"manifest\" href=\"/manifest.json\">\n";
-  html += "<title>Fridge</title>\n";
-  html += "<style type=\"text/css\">\n";
-  html += "body { font-family: verdana, arial, sans-serif; background-color: #a0a0ff; }";
-  html += "</style>";
-  html += "</head>\n";
-  html += "<body>\n";
-  html += "<center><img src=\"fridge192.png\" border=\"0\"></center>\n";
-  html += "<form action=\"/set\">\n";
-  html += "<table>\n";
-  html += "<tr><td>Time:</td><td>" + timeClient.getFormattedTime() + " </td></tr>\n";
-  html += "<tr><td>Build:</td><td>" __DATE__ " " __TIME__ " </td></tr>\n";
-  html += "<tr><td>Commit:</td><td>" + hash + "</td></tr>\n";
-  html += "<tr><td>Uptime:</td><td>" + String(uptime) + " ms</td></tr>\n";
-  html += "<tr><td>Upper temp:</td><td>" + String(upperC) + " &deg;C</td></tr>\n";
-  html += "<tr><td>Lower temp:</td><td>" + String(lowerC) + " &deg;C</td></tr>\n";
-  html += "<tr><td>Rear  temp:</td><td>" + String(rearC)  + " &deg;C</td></tr>\n";
-
-  html += "<tr><td>Compressor:</td><td>";
-  if (comprActive) {
-    unsigned duration = uptime-lastMotorOn;
-    html += String("ACTIVE ") + duration; 
-  } else {
-    unsigned long duration = uptime - lastMotorOff;
-    html += String(comprRequired ? "REQUIRED " : "OFF ") + duration + "/" + String(MOTOR_MIN_OFF_TIME);
+  unsigned int seconds = (8*uptime/heartbeatDivisor)%2500;
+  unsigned int duty = 0;
+  if (seconds<256) {
+    duty = seconds;
+  } else if (seconds<512) {
+    duty = 511-seconds;
   } 
-  html += "</td></tr>\n";
-  
-  html += "<tr><td>Door:</td><td>";
-  if (isOpen) {
-      html += "OPEN ";
-      html += deltaDoor;
-      html += " ms";
+  duty /= 10;  // 10% brightness
+  setLed(duty);
+}
+
+bool measureValid(float temp) {
+  // dallas sensor reports -127 resp. 85 when measurement failed
+  return -80<temp && temp<80;
+}
+
+void logMotorDutyInfo() {
+  logUDP(String("DEBUG: lastMotorOffDuration=") + String(lastMotorOffDuration) + " avgMotorOffDuration=" + avgMotorOffDuration);
+  logUDP(String("DEBUG: lastMotorOnDuration=")  + String(lastMotorOnDuration ) + " avgMotorOnDuration="  + avgMotorOnDuration);
+  if (avgMotorOnDuration+avgMotorOffDuration > 0) {
+    unsigned long dutyCycle = 100*avgMotorOnDuration / (avgMotorOnDuration+avgMotorOffDuration);
+    logUDP(String("DEBUG: dutyCycle=") + dutyCycle);
+  }
+}
+
+void checkConnectionStatus() {
+  const bool connected = WiFi.status() == WL_CONNECTED;
+  if (!connected) {
+    const unsigned long delta = mymillis() - lastWifiSetup;
+    logUDP(String("CHECKWIFI: DISCONNECTED ") + delta);    
+    if (delta > CONNECTION_CHECK_INTERVAL) {
+      if (reconnectionAttempts>10) {
+        logUDP("ACTION: TOO MANY RECONNECTS RESTART");
+        ESP.restart();
+      }
+      logUDP("ACTION: RECONNECT");
+      const bool verbose = false;
+      setupWifi(verbose);
+      reconnectionAttempts++;
+      lastWifiSetup = mymillis();
+    }
+  }
+}
+
+void measureTemperatures() {
+    unsigned long uptime = mymillis();
+    unsigned long delta = uptime - lastTemperatureMeasurementTime;
+
+    if (delta > TEMPERATURE_UPDATE_INTERVALL) {
+      if (!tempRequested) {
+        digitalWrite(PIN_BUZZER, HIGH);  // avoid long beeps
+        unsigned long t0 = mymillis();
+        sensors.requestTemperatures();
+        unsigned long t1 = mymillis();
+        logUDP(String("MEASURE: DURATION ") + (t1-t0));
+        tempRequested = true;
+      }
+
+      lowerC  = printData(addresses[addressMapping[0]]);        
+      upperC  = printData(addresses[addressMapping[1]]);
+      rearC   = printData(addresses[addressMapping[2]]);
+
+      if (measureValid(lowerC) && measureValid(upperC)) {
+        lastValidMeasureTime = uptime;
+      } else {
+        if (uptime-lastSensorAlarm > SENSOR_ALARM_INTERVAL) {
+          logUDP(String("ALARM: SENSOR FAILURE U ") + upperC + " L " + lowerC + " R " + rearC);
+          beep(50);
+          lastSensorAlarm = uptime;          
+        }
+      }
+
+      if (!measureValid(rearC)) {
+        if (uptime-lastSensorWarning > SENSOR_WARN_INTERVAL) {
+          logUDP(String("WARN: REAR SENSOR FAILURE ") + rearC);
+          lastSensorWarning = uptime;          
+        }
+      }
+
+      lastTemperatureMeasurementTime = mymillis();
+
+      beep(1);
+      sensors.requestTemperatures();
+      tempRequested = true;
+    }
+}
+
+void setupTemperaturePresets() {
+  float lowerTemp  = 3;
+  float upperTemp  = 8;
+  float hysteresis = 2;
+  if (preferences.isKey("lowerTemp")) {    
+    logUDP("KEY: lowerTemp FOUND");
+    lowerTemp  = preferences.getFloat("lowerTemp");
   } else {
-      html += "CLOSED";
+    logUDP("KEY: lowerTemp NOT FOUND");
   }
-  html += "</td></tr>\n";
-
-  float percentage = (100.0*lastDutyCycle)/255;
-  html += "<tr><td>Fan</td><td>" + String(percentage)  + " %</td></tr>\n";
-  html += "<tr><td>Upper setpoint:</td><td><input type=\"text\" name=\"upper\" value=\""  + String((T_UPPER_HI+T_UPPER_LO)/2) + "\" />&deg;C</td></tr>\n";
-  html += "<tr><td>Lower setpoint:</td><td><input type=\"text\" name=\"lower\" value=\""  + String((T_LOWER_HI+T_LOWER_LO)/2) + "\" />&deg;C</td></tr>\n";
-  html += "<tr><td>Hysteresis:    </td><td><input type=\"text\" name=\"hyster\" value=\"" + String(hysteresis) + "\" />&deg;C</td></tr>\n";
-  html += "<tr><td><input type=\"submit\" name=\"submit\" value=\"Submit\" /></td></tr>\n";
-  html += "</table>\n";
-  html += "</form>\n";
-  html += "<br/><br/>\n";
-  html += "<a href=\"/test.html\">[TEST]</a>\n";
-  html += "\n</body>\n</html>\n";
-  server.send(200, "text/html", html);
-}
-
-void serverRedirect(String msg, String url, unsigned int seconds) {
-  logUDP("DEBUG: serverRedirect");
-  String html = String("<html>\n");
-  html += "<head>\n";
-  html += "<meta http-equiv=\"refresh\" content=\"" + String(seconds) + "; URL=" + url + "\">\n";
-  html += "</head>\n";
-  html += "<body style=\"font-family: verdana, arial, sans-serif; background-color: #a0ffa0; font-size: 48px;\">\n";
-  html += "<center><h1><br/><br/><br/>";
-  html += msg;
-  html += "</h1></center>\n";
-  html += "</body>\n";
-  html += "</html>\n";
-  server.send(200, "text/html", html);
-}
-
-void serverTestaction() {
-
-  String confirm = server.arg(0);
-  if (confirm!="confirm") {
-    serverRedirect("NO CONFIRM", "/test.html", 3);
-    return;
-  }
-
-  String submit = server.arg(1);
-  logUDP(String("TEST: ") + submit);
-  beep(30);
-
-  if (submit=="RST") {
-    logUDP("DEBUG: serverReset");
-    serverRedirect("RESET", "/test.html", 10);
-    ESP.restart();
-  } else if (submit=="FON") {
-    setFan(255);
-    serverRedirect("FAN 100%", "/test.html", 3);
-  } else if (submit=="FOFF") {
-    setFan(0);
-    serverRedirect("FAN 0%", "/test.html", 3);
-  } else if (submit=="CON") {      
-    setCompressor(1, false);
-    serverRedirect("COMPRESSOR ON", "/test.html", 3);
-  } else if (submit=="COFF") {      
-    setCompressor(0, false);
-    serverRedirect("COMPRESSOR OFF", "/test.html", 3);
+  if (preferences.isKey("upperTemp")) {    
+    logUDP("KEY: upperTemp FOUND");
+    upperTemp  = preferences.getFloat("upperTemp");
   } else {
-    serverRedirect(String("UNKNOWN ACTION ") + submit, "/test.html", 5);
+    logUDP("KEY: upperTemp NOT FOUND");
   }
-}
-
-void serverTestpage() {
-  String html = String("<!DOCTYPE html PUBLIC \"-//WAPFORUM//DTD XHTML Mobile 1.0//EN\" \"http://www.wapforum.org/DTD/xhtml-mobile10.dtd\">\n");
-  html += "<html>\n";
-  html += "<head>\n";
-  html += "<title>Fridge Test</title>\n";
-  html += "<style type=\"text/css\">\n";
-  html += "body { font-family: verdana, arial, sans-serif; background-color: #a0a0ff; }";
-  html += "</style>";
-  html += "</head>\n";
-  html += "<body>\n";
-  html += "<h1>TEST PAGE</h1>\n";
-  html += "<form action=\"/testaction\">\n";
-  html += "<table>\n";
-  html += String("<tr><td>T_UPPER_HI: </td><td>") + T_UPPER_HI;
-  html += "</td></tr>\n";
-  html += String("<tr><td>T_UPPER_LO: </td><td>") + T_UPPER_LO;
-  html += "</td></tr>\n";
-  html += String("<tr><td>T_LOWER_HI: </td><td>") + T_LOWER_HI;
-  html += "</td></tr>\n";
-  html += String("<tr><td>T_LOWER_LO: </td><td>") + T_LOWER_LO;
-  html += "</td></tr>\n";
-  html += "</table>\n";
-  html += "<br/><br/>\n";
-  html += "confirm: <input type=\"text\" name=\"confirm\"><br/><br/>\n";
-  html += "<input type=\"submit\" name=\"RST\"  value=\"RST\">\n";
-  html += "<input type=\"submit\" name=\"CON\"  value=\"FON\">\n";
-  html += "<input type=\"submit\" name=\"COFF\" value=\"FOFF\">\n";
-  html += "<input type=\"submit\" name=\"FON\"  value=\"CON\">\n";
-  html += "<input type=\"submit\" name=\"FOFF\" value=\"COFF\">\n";
-  html += "</form><br/><br/>\n";
-  html += "<a href=\"/index.html\">[BACK]</a>\n";
-  html += "</body>\n";
-  html += "</html>\n";
-  server.send(200, "text/html", html);
-}
-
-void serverSet() {
-  logUDP("DEBUG: serverSet");
-  String upper = server.arg(0);
-  String lower = server.arg(1);
-  String hyster = server.arg(2);
-
-  upperTemp  = constrain(upper.toFloat(),  0, 30);
-  lowerTemp  = constrain(lower.toFloat(),  0, 30);
-  hysteresis = constrain(hyster.toFloat(), 0, 10);
-
-  preferences.putFloat("upperTemp", upperTemp);
-  preferences.putFloat("lowerTemp", lowerTemp);
-  preferences.putFloat("hysteresis", hysteresis);
+  if (preferences.isKey("hysteresis")) {    
+    logUDP("KEY: hysteresis FOUND");
+    hysteresis  = preferences.getFloat("hysteresis");
+  } else {
+    logUDP("KEY: hysteresis NOT FOUND");
+  }
 
   T_UPPER_HI = upperTemp + hysteresis/2;
   T_UPPER_LO = upperTemp - hysteresis/2;
+
   T_LOWER_HI = lowerTemp + hysteresis/2;
   T_LOWER_LO = lowerTemp - hysteresis/2;
 
-  logUDP(String("SERVER: LOWER [") + T_LOWER_LO + ", " + T_LOWER_HI + "]");
-  logUDP(String("SERVER: UPPER [") + T_UPPER_LO + ", " + T_UPPER_HI + "]");
-  serverRedirect("OK", "/", 2);
-  beep(30);
-}
-
-const char PGM_CT_APPL_JSON[] PROGMEM = "application/json";
-
-void sendBinary(PGM_P src, size_t contentLength, const char *contentType) {
-  logUDP("DEBUG: sendBinary");
-  WiFiClient client = server.client();
-  String head
-    = String("HTTP/1.0 200 OK\r\n") +
-      "Content-Type: "   + contentType + "\r\n"
-      "Content-Length: " + contentLength + "\r\n"
-      "Connection: close\r\n"
-      "\r\n";
-  client.write(head.c_str(), head.length());
-
-  char buffer[256];
-  const unsigned int size = sizeof(buffer);
-
-  unsigned int offs = 0;
-  unsigned int left = contentLength;
-  do {
-    unsigned int count = left<size ? left : size;
-    memcpy_P(buffer, src+offs, count);
-    client.write(buffer, count);
-    client.flush();
-    offs+=count;
-    left-=count;
-  } while (left>0);
-  client.stop();
-}
-
-// void handleHomeIcon72() {
-//    logUDP("DEBUG: handleHomeIcon72");
-//  	 sendBinary(FRIDGE72_PNG, sizeof(FRIDGE72_PNG), "image/png");
-// }
-
-void handleHomeIcon192() {
-   logUDP("DEBUG: handleHomeIcon192");
- 	 sendBinary(FRIDGE192_PNG, sizeof(FRIDGE192_PNG), "image/png");
-}
-
-void handleFavicon() {
-  logUDP("DEBUG: handleFavicon");
-  sendBinary(FAVICON_ICO, sizeof(FAVICON_ICO), "image/x-icon");
-}
-
-void handleManifest() {
-  logUDP("DEBUG: handleManifest");
-  server.send_P(200, PGM_CT_APPL_JSON, MANIFEST_JSON);
-}
-
-void setupWebserver() {
-  server.on("/", serverIndex);
-  server.on("/index.html", serverIndex);
-  server.on("/set", serverSet);
-
-  server.on("/test.html", serverTestpage);
-  server.on("/testaction", serverTestaction);
-
-  server.on("/manifest.json", handleManifest);
-  server.on("/favicon.ico",   handleFavicon);
-  server.on("/fridge192.png", handleHomeIcon192);
-
-  server.onNotFound(handleNotFound);
-  server.begin();
+  lowerTemp = constrain(lowerTemp,   0, 30);
+  upperTemp = constrain(upperTemp,   0, 30);
+  hysteresis = constrain(hysteresis, 0, 10);
+  
+  logUDP(String("INIT: lowerTemp=") + lowerTemp);
+  logUDP(String("INIT: upperTemp=") + upperTemp);
+  logUDP(String("INIT: hysteresis=") + hysteresis);
 }
 
 void setup(void) {
@@ -657,232 +402,61 @@ void setup(void) {
   pinMode(PIN_BUZZER, OUTPUT);
 
   pixels.begin();
+  preferences.begin("fridge", false);
 
-  WiFi.mode(WIFI_STA);
-  setupWifi();
+  if (preferences.isKey("reboots")) {
+    reboots = preferences.getLong("reboots");
+    reboots++;
+  } else {
+    reboots = 1;
+  }
+  preferences.putLong("reboots", reboots);
 
+  WiFi.mode(WIFI_AP_STA);
+  setupWifi(true);
+
+  loggingUDP.begin(UDP_PORT);
+  
   logUDP(sketch);
   logUDP(build);
-  UDP.begin(UDP_PORT);
+  logUDP(String("WIFI: LOCAL ") + WiFi.localIP().toString() + " BSSID " + WiFi.BSSIDstr());
 
-  logUDP(String("WIFI: LOCAL: ") + WiFi.localIP().toString() + " BSSID: " + WiFi.BSSIDstr());
-  logUDP("FRITZBOX7490: 34:31:C4:B8:31:33");
-  logUDP("FRITZBOX7590: B0:F2:08:1D:10:1D");
-
-  logUDP("INIT_OTA: START");
-  ArduinoOTA.onStart(handleOTAStart);
-  ArduinoOTA.onProgress(handleOTAProgress);
-  ArduinoOTA.onEnd(handleOTAEnd);
-
-  ArduinoOTA.setHostname("ESP_Fridge_OTA");
-  //ArduinoOTA.setPassword("4711");
-  ArduinoOTA.begin();
-  logUDP("INIT_OTA: DONE");
-
+  setupOta();
   setupSensors();
   setupWebserver();
 
-  preferences.begin("fridge", false);
-
-  float lowerTemp  = 3;
-  float upperTemp  = 8;
-  float hysteresis = 2;
-  if (preferences.isKey("lowerTemp")) {    
-    lowerTemp  = preferences.getFloat("lowerTemp");
-  }
-  if (preferences.isKey("upperTemp")) {    
-    upperTemp  = preferences.getFloat("upperTemp");
-  }
-  if (preferences.isKey("hysteresis")) {    
-    hysteresis  = preferences.getFloat("hysteresis");
-  }
-
-  T_UPPER_HI = upperTemp + hysteresis/2;
-  T_UPPER_LO = upperTemp - hysteresis/2;
-
-  T_LOWER_HI = lowerTemp + hysteresis/2;
-  T_LOWER_LO = lowerTemp - hysteresis/2;
-
-  logUDP(String("INIT: lowerTemp=") + lowerTemp);
-  logUDP(String("INIT: upperTemp=") + upperTemp);
-  logUDP(String("INIT: hysteresis=") + hysteresis);
-
-  lowerTemp = constrain(lowerTemp,   0, 30);
-  upperTemp = constrain(upperTemp,   0, 30);
-  hysteresis = constrain(hysteresis, 0, 10);
-  
-  logUDP(String("INIT: lowerTemp=") + lowerTemp);
-  logUDP(String("INIT: upperTemp=") + upperTemp);
-  logUDP(String("INIT: hysteresis=") + hysteresis);
-    
+  setupTemperaturePresets();    
   timeClient.begin();
   timeClient.setTimeOffset(3600);
 
-  for (int retry=0; retry<100 && !timeClient.update(); retry++) {
-    logUDP("DEBUG: GET TIME");
+  for (int retry=0; retry<10 && !timeClient.update(); retry++) {
     timeClient.forceUpdate();
     if (!timeClient.update()) {
       delay(100);
     }
   }
-  String formattedTime = timeClient.getFormattedTime();
-  logUDP(String("TIME: ") + formattedTime);
+  startTime = timeClient.getFormattedTime();
+  logUDP(String("TIME: ") + startTime);
 
   setLed(255); setFan(255);
-  delay(500);
+  delay(2000);
   setLed(0); setFan(0);
-}
 
-// function to print a device address
-String formatAddress(DeviceAddress deviceAddress) {
-  String rtv = "";
-  for (uint8_t i = 0; i < 8; i++) {
-    if (deviceAddress[i] < 16) rtv+= "0";
-    rtv += String(deviceAddress[i], HEX);
-  }
-  return rtv;
-}
-
-// function to print the temperature for a device
-float readTemperature(DeviceAddress deviceAddress) {
-  float tempC = sensors.getTempC(deviceAddress);
-  if (tempC == DEVICE_DISCONNECTED_C) {
-    return DEVICE_DISCONNECTED_C;
-  }
-  return tempC;
-}
-
-// function to print a device's resolution
-void printResolution(DeviceAddress deviceAddress) {
-  logUDP(String("Resolution: ") + sensors.getResolution(deviceAddress));
-}
-
-// main function to print information about a device
-float printData(DeviceAddress deviceAddress) {
-  float tempC = readTemperature(deviceAddress);
-  logUDP(String("SENSOR: ") +  formatAddress(deviceAddress) + " C: " + tempC);
-  return tempC;
-}
-
-void beep(long ms) {
-  digitalWrite(PIN_BUZZER, LOW);
-  delay(ms);
-  digitalWrite(PIN_BUZZER, HIGH);
-}
-
-void heartbeat() {
-  bool disconnected = (WiFi.status() != WL_CONNECTED);
-  if (disconnected) {
-    heartbeatDivisor = comprActive ? 1 : 2;
-  } else {
-    heartbeatDivisor = comprActive ? 8 : 16;
-  }
-
-  unsigned long uptime = mymillis();
-  unsigned int seconds = (8*uptime/heartbeatDivisor)%2500;
-  unsigned int duty = 0;
-  if (seconds<256) {
-    duty = seconds;
-  } else if (seconds<512) {
-    duty = 511-seconds;
-  } 
-  duty /= 10;  // 10% brightness
-  setLed(duty);
-}
-
-bool measureValid(float temp) {
-  // dallas sensor reports -127 resp. 85 when measurement failed
-  return temp>100 && temp<80;
-}
-
-void handleSerialDebug() {
-  if (Serial.available()) {
-    String data = Serial.readStringUntil('\n');
-    Serial.print("ECHO: "); Serial.println(data);
-    if (data=="RST") {
-      pixels.clear();
-      pixels.show();
-      ESP.restart();
-    } else if (data=="DIS") {
-      WiFi.disconnect(false, false);
-    } else if (data=="EN") {
-      WiFi.begin(WIFI_SSID, WIFI_PASS);
-    } else if (data=="HD1") {
-      heartbeatDivisor = 1;
-    } else if (data=="HD2") {
-      heartbeatDivisor = 2;
-    } else if (data=="HD4") {
-      heartbeatDivisor = 4;
-    } else if (data=="HD8") {
-      heartbeatDivisor = 8;
-    } else if (data=="HD16") {
-      heartbeatDivisor = 16;
-    } else if (data=="HD32") {
-      heartbeatDivisor = 32;
-    } else if (data=="CON"){
-      setCompressor(1, true);
-    } else if (data=="COFF"){
-      setCompressor(0, true);
-    } else if (data=="FON"){
-      int door = digitalRead(PIN_DOOR);
-      bool isClosed = door == CLOSED;
-      bool isOpen = !isClosed;
-      if (isOpen) {
-        logUDP("ERROR: CMD DENIED DOOR IS OPEN");
-        logUDP("ERROR: CMD DENIED DOOR IS OPEN");
-        logUDP("ERROR: CMD DENIED DOOR IS OPEN");
-      }
-      setFan(255);
-    } else if (data=="FOFF") {
-      setFan(0);
-    } else if (data=="F0") {
-      setFan(0);
-    } else if (data=="F1") {
-      setFan(1);
-    } else if (data=="F80") {
-      setFan(80);
-    } else if (data=="F90") {
-      setFan(90);
-    } else if (data=="F100") {
-      setFan(100);
-    } else if (data=="F120") {
-      setFan(120);
-    } else if (data=="F150") {      
-      setFan(150);
-    } else if (data=="F200") {      
-      setFan(200);
-    } else if (data=="F255") {      
-      setFan(255);
-    } else if (data=="F512") {      
-      setFan(512);
-    } else {
-      Serial.print("ERROR: "); Serial.println(data);
-    }
-  }
-}
-
-unsigned int reconnectionAttempts = 0;
-
-void logMotorDutyInfo() {
-  logUDP(String("DEBUG: lastMotorOffDuration=") + String(lastMotorOffDuration) + " avgMotorOffDuration=" + avgMotorOffDuration);
-  logUDP(String("DEBUG: lastMotorOnDuration=")  + String(lastMotorOnDuration ) + " avgMotorOnDuration="  + avgMotorOnDuration);
-  if (avgMotorOnDuration+avgMotorOffDuration > 0) {
-    unsigned long dutyCycle = 100*avgMotorOnDuration / (avgMotorOnDuration+avgMotorOffDuration);
-    logUDP(String("DEBUG: dutyCycle=") + dutyCycle);
-  }
+  // get inital values ASAP
+  measureTemperatures();
 }
 
 void loop(void) {
 
-  handleSerialDebug();
+  handleSerialCommands();
   server.handleClient();
-
-  unsigned long uptime = mymillis();
   heartbeat();
-  int door = digitalRead(PIN_DOOR);
-  bool isClosed = door == CLOSED;
-  bool isOpen = !isClosed;
-  unsigned long deltaDoor = uptime - lastClosed;
+
+  const unsigned long uptime = mymillis();
+  const int door = digitalRead(PIN_DOOR);
+  const bool isDoorClosed = door == CLOSED;
+  const bool isDoorOpen = !isDoorClosed;
+  const unsigned long doorOpenDuration = uptime - lastClosed;
 
   if (!loopCalled) {
     logUDP(String("START: ") + uptime);
@@ -898,101 +472,68 @@ void loop(void) {
     return;
   }
 
-  if (uptime - lastTick > 10 * 1000) {
+  if (uptime - lastTickTime > HEARTBEAT_TICK_INTERVAL) {
     beep(1);
     //logUDP("TICK");
-    lastTick = uptime;
+    lastTickTime = uptime;
   }
 
-  unsigned long delta = deltaDoor;
-  // measure temparatures only if door is closed or was open for a long time
-  // to avoid delays in the light animation when door is opened
-  // also measure within the forst 10 seconds of uptime to get first values asap
-  if (isClosed || delta > 10000 || uptime < 10000) {
-    if (uptime - lastTemp > 10000) {
-      if (!tempRequested) {
-        digitalWrite(PIN_BUZZER, HIGH);  // avoid long beeps
-        unsigned long t0 = mymillis();
-        sensors.requestTemperatures();
-        unsigned long t1 = mymillis();
-        logUDP(String("MEASURE: DURATION ") + (t1-t0));
-        tempRequested = true;
-      }
-
-      lowerC  = printData(addresses[addressMapping[0]]);        
-      upperC  = printData(addresses[addressMapping[1]]);
-      rearC   = printData(addresses[addressMapping[2]]);
-
-      if (measureValid(lowerC) && measureValid(upperC)) {
-        lastValidMeasureTime = uptime;
-      } else {
-        if (uptime-lastSensorAlarm > SENSOR_ALARM_INTERVAL) {
-          logUDP(String("ALARM: SENSOR FAILURE U ") + upperC + " L " + lowerC + " R " + rearC);
-          beep(50);
-          lastSensorAlarm = uptime;          
-        }
-      }
-
-      if (!measureValid(rearC)) {
-        if (uptime-lastSensorWarning > SENSOR_WARN_INTERVAL) {
-          logUDP(String("WARN: REAR SENSOR FAILURE ") + rearC);
-          lastSensorWarning = uptime;          
-        }
-      }
-
-      lastTemp = mymillis();
-
-      digitalWrite(PIN_BUZZER, HIGH); // avoid long beeps
-      sensors.requestTemperatures();
-      tempRequested = true;
-    }
+  // measure temparatures only 
+  // - if door is closed to avoid delays in light animation when door opens
+  // - door was open for a long time (to update temperature display)
+  // - within first 10 secs after startup to get valid measures ASAP
+  if (isDoorClosed || doorOpenDuration > 10000 || uptime < 10000) {
+    measureTemperatures();
   }
 
-  if (uptime - lastUptime > 10000) {
-    unsigned long duration = uptime - lastMotorOff;
+  if (uptime - lastStatusLogged > 10000) {
+    unsigned long duration = uptime - lastMotorOffTime;
     if (comprActive) {
-      duration = uptime-lastMotorOn;
+      duration = uptime - lastMotorOnTime;
       logUDP(String("COMPRESSOR: ACTIVE ") + duration); 
     } else {
       logUDP(String("COMPRESSOR: ") + (comprRequired ? "REQUIRED " : "OFF ") + duration + "/" + MOTOR_MIN_OFF_TIME);
     } 
     logUDP(String("FAN: ") + fanDuty);
     logUDP(String("UPTIME: ") + uptime);
-    logUDP(String("DOOR: ") + (isOpen ? "OPEN " : "CLOSED ") + deltaDoor + "/" + DOOR_OPEN_WARN_TIME);
+    logUDP(String("DOOR: ") + (isDoorOpen ? "OPEN " : "CLOSED ") + doorOpenDuration + "/" + DOOR_OPEN_WARN_TIME);
     logUDP(String("TEMP: UPPER ") + T_UPPER_LO + " " + T_UPPER_HI + " " + (upperC<T_UPPER_LO ? "LO" : upperC>T_UPPER_HI ? "HI" : "OK"));
     logUDP(String("TEMP: LOWER ") + T_LOWER_LO + " " + T_LOWER_HI + " " + (lowerC<T_LOWER_LO ? "LO" : lowerC>T_LOWER_HI ? "HI" : "OK"));
     logUDP(String("HEAP: "  ) + ESP.getFreeHeap()  + " MIN " + ESP.getMinFreeHeap() );
     logMotorDutyInfo();
-    lastUptime = uptime;
+    lastStatusLogged = uptime;
   }
 
   int fanWasDuty = fanDuty;
-  if (isOpen) {
+  if (isDoorOpen) {
     if (fanDuty > 0) {
       logUDP("ACTION: DOOR OPEN FAN OFF");
     }
     fanDuty = 0;
   } else if (upperC > T_UPPER_HI) {
-    if (fanDuty == 0) {
-      logUDP(String("ACTION: UPPER TOO HIGH FAN ON ") + upperC + ">" + T_UPPER_HI);
-    }
-    float deltaT = upperC - T_UPPER_HI;
+    const float oldDuty = fanDuty;
+    const float deltaT = upperC - T_UPPER_HI;
     fanDuty = round(100 * deltaT);
     if (fanDuty < PWM_MIN_CYCLE) fanDuty = PWM_MIN_CYCLE;
     if (fanDuty > 255) fanDuty = 255;
+    if (oldDuty <= 0) { // can bei -1 initially
+      logUDP(String("UPPER: TEMP OVER UPPER LIMIT ") + upperC + ">" + T_UPPER_HI);
+      logUDP("ACTION: FAN ON");
+    }
   } else if (upperC < T_UPPER_LO) {
     if (fanDuty > 0) {
-      logUDP(String("ACTION: UPPER OK FAN OFF ") + upperC + "<" + T_UPPER_LO);
+      logUDP(String("UPPER: TEMP BELOW LOWER LIMIT ") + upperC + "<" + T_UPPER_LO);
+      logUDP("ACTION: FAN OFF ");
     }
     fanDuty = 0;
   }
 
   if (fanWasDuty != fanDuty) {
     setFan(fanDuty);
-    logUDP(String("ACTION: FAN DUTY ") + fanDuty);
+    logUDP(String("ACTION: FAN DUTY CHANGED ") + fanDuty);
   }
 
-  unsigned long deltaM = uptime - lastMotorOff;
+  unsigned long deltaM = uptime - lastMotorOffTime;
   bool isWaiting = deltaM < MOTOR_MIN_OFF_TIME;
 
   if (lowerC > T_LOWER_HI) {
@@ -1000,8 +541,8 @@ void loop(void) {
       if (!comprActive) {
         logUDP(String("ACTION: ACTIVATE COMPRESSOR ") + lowerC + ">" + T_LOWER_HI + " WAITED: " + deltaM + "/" + MOTOR_MIN_OFF_TIME);
         setCompressor(1, false);
-        lastMotorOn = uptime;
-        lastMotorOffDuration = uptime-lastMotorOff;
+        lastMotorOnTime = uptime;
+        lastMotorOffDuration = uptime-lastMotorOffTime;
         if (avgMotorOffDuration==0) {
           avgMotorOffDuration = lastMotorOffDuration;
         } else {
@@ -1018,8 +559,8 @@ void loop(void) {
     if (comprRequired) {
       logUDP(String("ACTION: DEACTIVATE COMPRESSOR ") + lowerC + "<" + T_LOWER_LO);
       setCompressor(0, false);
-      lastMotorOff = uptime;
-      lastMotorOnDuration = uptime-lastMotorOn;
+      lastMotorOffTime = uptime;
+      lastMotorOnDuration = uptime - lastMotorOnTime;
       if (avgMotorOnDuration==0) {
         avgMotorOnDuration = lastMotorOnDuration;
       } else {
@@ -1033,7 +574,7 @@ void loop(void) {
   bool openWarning = false;
   bool openAlarm = false;
 
-  if (!isClosed) {
+  if (!isDoorClosed) {
     unsigned long delta = mymillis() - lastClosed;
     if (delta > DOOR_OPEN_WARN_TIME) {
       openWarning = true;
@@ -1043,23 +584,24 @@ void loop(void) {
     }
   }
 
-  if (isOpen) {
+  if (isDoorOpen) {
     setFan(0);
   }
 
-  if (isClosed) {
-    if (!wasClosed) {
+  if (isDoorClosed) {
+    if (!wasDoorClosed) {
       logUDP("ACTION: CLOSED");
       setFan(255);
       logUDP("DEBUG: FAN SET TO 255");
     }    
     pixels.clear();  // Set all pixel colors to 'off'
     lastClosed = mymillis();
-    wasClosed = true;
+    wasDoorClosed = true;
   } else {
-    if (wasClosed) {
+    if (wasDoorClosed) {
       logUDP("ACTION: OPENED");
       beep(DOOR_OPENED_BEEP_TIME);
+      checkConnectionStatus();
     }
     unsigned long delta = mymillis() - lastClosed;
     long count = (delta / 4000.0) * NUMPIXELS;
@@ -1105,28 +647,18 @@ void loop(void) {
       int index = (interval<NUMPIXELS) ? interval : 2*NUMPIXELS-1-interval; // 23-12, ..., 23-23 => 11, ..., 0
       if (disconnected) {
         pixels.setPixelColor(constrain(index, 0, NUMPIXELS-1), pixels.Color(0, 0, 255));
-        if (uptime - lastWifiSetup > 5*60*1000) {
-          if (reconnectionAttempts>10) {
-            logUDP("ACTION: TOO MANY RECONNECTS RESTART");
-            ESP.restart();
-          }
-          logUDP("ACTION: RECONNECT");
-          setupWifi();
-          reconnectionAttempts++;
-          lastWifiSetup = uptime;
-        }
       }
       if (isWaiting && !compressorWasOnAtLeastOnce) {
         pixels.setPixelColor(constrain(NUMPIXELS-index, 0, NUMPIXELS-1), pixels.Color(255, 0, 0));
       }
     }
-    wasClosed = false;
+    wasDoorClosed = false;
   }
   pixels.show();  // Send the updated pixel colors to the hardware.
 
   if (openAlarm) {
     int beep = millis() % 1000;
-    if (beep < 100) {
+    if (beep < 20) {
       digitalWrite(PIN_BUZZER, LOW);
       lastDoorAlarm = uptime;
     } else {
@@ -1138,6 +670,8 @@ void loop(void) {
   } else {
     digitalWrite(PIN_BUZZER, HIGH);
   }
+
+  checkConnectionStatus();
 }
 
 void logUDP(String msg) {
@@ -1148,11 +682,11 @@ void logUDP(String msg) {
     Serial.print("] ");
     Serial.println(msg);
 
-    UDP.beginPacket("255.255.255.255", UDP_PORT);
-    UDP.print("  [");
-    UDP.print(formattedTime);
-    UDP.print("] ");
-    UDP.print(msg);
-    UDP.endPacket();
+    loggingUDP.beginPacket("255.255.255.255", UDP_PORT);
+    loggingUDP.print("  [");
+    loggingUDP.print(formattedTime);
+    loggingUDP.print("] ");
+    loggingUDP.print(msg);
+    loggingUDP.endPacket();
   }
 }

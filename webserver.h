@@ -16,7 +16,7 @@ const char MANIFEST_JSON[] PROGMEM =
 WebServer server(80);
 
 void handleNotFound() {
-  logUDP("DEBUG: handleNotFound");
+  //logUDP("DEBUG: handleNotFound");
   server.send(404, "text/plain", "File Not Found\n\n");
 }
 
@@ -37,13 +37,19 @@ String toHumanReadableTime(int secs) {
     if (t.length() > 0) t += ", ";
     t += String(mins) + "m";
   }
-  if (t.length() > 0) t += ", ";
-  t += String(secs) + "s";
+  if (t.length() > 0) {
+    if (secs>0) {
+      t += ", ";
+      t += String(secs) + "s";
+    }
+  } else {
+    t += String(secs) + "s";
+  }
   return t;
 }
 
 void serverIndex() {
-  logUDP("DEBUG: serverIndex");
+  //logUDP("DEBUG: serverIndex");
   const unsigned long uptime = mymillis();
   const unsigned long motorOnDuration = uptime - lastMotorOnTime;
 
@@ -92,14 +98,16 @@ void serverIndex() {
     html += String("ACTIVE ") + duration; 
   } else {
     unsigned long motorOffDuration = uptime - lastMotorOffTime;
-    html += String(comprRequired ? "REQUIRED " : "OFF ") + motorOffDuration + "/" + String(MOTOR_MIN_OFF_TIME);
+    const String waited = toHumanReadableTime(motorOffDuration/1000);
+    const String total  = toHumanReadableTime(MOTOR_MIN_OFF_TIME/1000);
+    html += String(comprRequired ? "REQUIRED " : "OFF ") + waited + " / " + total;
   } 
   html += "</td></tr>\n";
   
   html += "<tr><td>Door:</td><td>";
   if (isDoorOpen) {
       html += "OPEN ";
-      html += doorOpenDuration;
+      html += toHumanReadableTime(doorOpenDuration/1000);
       html += " ms";
   } else {
       html += "CLOSED";
@@ -124,7 +132,7 @@ void serverIndex() {
 }
 
 void serverRedirect(String msg, String url, unsigned int seconds) {
-  logUDP("DEBUG: serverRedirect");
+  //logUDP("DEBUG: serverRedirect");
   String html = String("<html>\n");
   html += "<head>\n";
   html += "<meta http-equiv=\"refresh\" content=\"" + String(seconds) + "; URL=" + url + "\">\n";
@@ -147,11 +155,11 @@ void serverTestaction() {
   }
 
   String submit = server.arg(1);
-  logUDP(String("TEST: ") + submit);
+  //logUDP(String("TEST: ") + submit);
   beep(30);
 
   if (submit=="RST") {
-    logUDP("DEBUG: serverReset");
+    //logUDP("DEBUG: serverReset");
     serverRedirect("RESET", "/test.html", 10);
     ESP.restart();
   } else if (submit=="FON") {
@@ -313,6 +321,10 @@ void serverTestpage() {
   html += "</td></tr>\n";
   html += String("<tr><td>T_LOWER_LO: </td><td>") + T_LOWER_LO;
   html += "</td></tr>\n";
+  html += String("<tr><td>Avg. motor on: </td><td>") + avgMotorOnDuration;
+  html += "</td></tr>\n";
+  html += String("<tr><td>Avg. motor off: </td><td>") + avgMotorOffDuration;
+  html += "</td></tr>\n";
   html += "</table>\n";
   //html += "</center>\n";
   html += "<br/><br/>\n";
@@ -358,7 +370,7 @@ void serverSet() {
 const char PGM_CT_APPL_JSON[] PROGMEM = "application/json";
 
 void sendBinary(PGM_P src, size_t contentLength, const char *contentType) {
-  logUDP("DEBUG: sendBinary");
+  //logUDP("DEBUG: sendBinary");
   WiFiClient client = server.client();
   String head
     = String("HTTP/1.0 200 OK\r\n") +
@@ -390,17 +402,17 @@ void sendBinary(PGM_P src, size_t contentLength, const char *contentType) {
 // }
 
 void handleHomeIcon192() {
-   logUDP("DEBUG: handleHomeIcon192");
+   //logUDP("DEBUG: handleHomeIcon192");
  	 sendBinary(FRIDGE192_PNG, sizeof(FRIDGE192_PNG), "image/png");
 }
 
 void handleFavicon() {
-  logUDP("DEBUG: handleFavicon");
+  //logUDP("DEBUG: handleFavicon");
   sendBinary(FAVICON_ICO, sizeof(FAVICON_ICO), "image/x-icon");
 }
 
 void handleManifest() {
-  logUDP("DEBUG: handleManifest");
+  //logUDP("DEBUG: handleManifest");
   server.send_P(200, PGM_CT_APPL_JSON, MANIFEST_JSON);
 }
 

@@ -47,10 +47,9 @@
 
 // compressor must not be activated for at least a couple of minutes after 
 // it was deactivated.
-#define MOTOR_MIN_OFF_TIME           (15 * MINUTES)
+#define MOTOR_MIN_OFF_TIME           (30 * MINUTES)
 #define COMPRESSOR_BEEP_ALWAYS
-#define COMPRESSOR_ON_BEEP_TIME       20
-#define COMPRESSOR_OFF_BEEP_TIME      10
+#define COMPRESSOR_BEEP_TIME         5
 
 
 #define PIN_SENSORS 5
@@ -98,18 +97,19 @@ long reboots;
 
 bool compressorWasOnAtLeastOnce = false;
 
-float T_UPPER_HI = 22.9;
-float T_UPPER_LO = 22.7;
-
-float T_LOWER_HI = 22.0;
-float T_LOWER_LO = 21.7;
-
-float lowerTemp = 3;
-float upperTemp = 8;
 float hysteresis = 2;
 
+float T_UPPER_HI = 6.0 + hysteresis/2;
+float T_UPPER_LO = 6.0 - hysteresis/2;
+
+float T_LOWER_HI = 6.0 + hysteresis/2;
+float T_LOWER_LO = 6.0 - hysteresis/2;
+
+float lowerTemp = -1;
+float upperTemp = -1;
+
 bool comprRequired = false;
-bool comprActive = false;
+bool comprActive   = false;
 
 unsigned int lastDutyCycle = 0;
 
@@ -211,7 +211,7 @@ void setCompressor(int onOff, bool silent) {
   if (!silent) {
     if (onOff) {
       #ifdef COMPRESSOR_BEEP_ALWAYS
-      beep(COMPRESSOR_ON_BEEP_TIME);
+      beep(COMPRESSOR_BEEP_TIME);
       #else
       if (!compressorWasOnAtLeastOnce) {
         beep(COMPRESSOR_ON_BEEP_TIME);
@@ -220,7 +220,9 @@ void setCompressor(int onOff, bool silent) {
       compressorWasOnAtLeastOnce = true;
     } else {
       #ifdef COMPRESSOR_BEEP_ALWAYS
-      beep(COMPRESSOR_OFF_BEEP_TIME);
+      beep(COMPRESSOR_BEEP_TIME);
+      delay(COMPRESSOR_BEEP_TIME);
+      beep(COMPRESSOR_BEEP_TIME);
       #endif
     }
   }
@@ -268,7 +270,7 @@ void logMotorDutyInfo() {
   logUDP(String("DEBUG: lastMotorOnDuration=")  + String(lastMotorOnDuration ) + " avgMotorOnDuration="  + avgMotorOnDuration);
   if (avgMotorOnDuration+avgMotorOffDuration > 0) {
     unsigned long dutyCycle = 100*avgMotorOnDuration / (avgMotorOnDuration+avgMotorOffDuration);
-    logUDP(String("DEBUG: dutyCycle=") + dutyCycle);
+    logUDP(String("DEBUG: measured motor dutyCycle=") + dutyCycle);
   }
 }
 
@@ -439,12 +441,14 @@ void setup(void) {
   logUDP(String("TIME: ") + startTime);
 
   setLed(255); setFan(255);
-  delay(2000);
+  delay(500);
   setLed(0); setFan(0);
 
   // get inital values ASAP
   measureTemperatures();
 }
+
+unsigned lastDebug = mymillis() - 10*1000;
 
 void loop(void) {
 
@@ -510,23 +514,36 @@ void loop(void) {
       logUDP("ACTION: DOOR OPEN FAN OFF");
     }
     fanDuty = 0;
-  } else if (upperC > T_UPPER_HI) {
-    const float oldDuty = fanDuty;
-    const float deltaT = upperC - T_UPPER_HI;
-    fanDuty = round(100 * deltaT);
-    if (fanDuty < PWM_MIN_CYCLE) fanDuty = PWM_MIN_CYCLE;
-    if (fanDuty > 255) fanDuty = 255;
-    if (oldDuty <= 0) { // can bei -1 initially
-      logUDP(String("UPPER: TEMP OVER UPPER LIMIT ") + upperC + ">" + T_UPPER_HI);
-      logUDP("ACTION: FAN ON");
-    }
   } else if (upperC < T_UPPER_LO) {
     if (fanDuty > 0) {
       logUDP(String("UPPER: TEMP BELOW LOWER LIMIT ") + upperC + "<" + T_UPPER_LO);
       logUDP("ACTION: FAN OFF ");
     }
     fanDuty = 0;
-  }
+  } else { // if (upperC >= T_UPPER_LO)
+    const float oldDuty = fanDuty;
+    // 75% of hysteresis -> start at T_UPPER_LO with 0% and increase to 66% at setpoint and furter 
+    // increase to 100% beyond setpoint
+    const float scale = 0.75;
+    const float range = scale * hysteresis;
+    const float delta = upperC - T_UPPER_LO;    
+
+    fanDuty = 255.0 * delta/range;
+    fanDuty = constrain(fanDuty, PWM_MIN_CYCLE, 255);
+    if (uptime - lastDebug > 30*1000) {
+      logUDP(
+        String("DEBUG:") +
+        String(" oldDuty=") + String(oldDuty) + 
+        String(" range=") + String(scale) + String("*") + String(hysteresis) + String("=") + String(range) + 
+        String(" delta=") + String(upperC)     + String("-") + String(T_UPPER_LO) + String("=") + String(delta) + 
+        String(" fanDuty:=") + String("255*") + String(delta) + String("/") + String(range) + String(" => ") + fanDuty);
+      lastDebug = uptime;
+    }
+    if (oldDuty <= 0) { // can be -1 initially
+      logUDP(String("UPPER: TEMP OVER UPPER LIMIT ") + upperC + ">" + T_UPPER_HI);
+      logUDP("ACTION: FAN ON");
+    }
+  } 
 
   if (fanWasDuty != fanDuty) {
     setFan(fanDuty);
@@ -620,7 +637,7 @@ void loop(void) {
 
     float upper = upperC;
     float lower = lowerC;
-    bool test = true;
+    const bool test = isDevel();
     if (test) {
       upper /= 5;
       lower /= 5;
@@ -649,7 +666,7 @@ void loop(void) {
         pixels.setPixelColor(constrain(index, 0, NUMPIXELS-1), pixels.Color(0, 0, 255));
       }
       if (isWaiting && !compressorWasOnAtLeastOnce) {
-        pixels.setPixelColor(constrain(NUMPIXELS-index, 0, NUMPIXELS-1), pixels.Color(255, 0, 0));
+        pixels.setPixelColor(constrain(NUMPIXELS-1-index, 0, NUMPIXELS-1), pixels.Color(255, 0, 0));
       }
     }
     wasDoorClosed = false;

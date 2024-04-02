@@ -47,10 +47,9 @@
 
 // compressor must not be activated for at least a couple of minutes after 
 // it was deactivated.
-#define MOTOR_MIN_OFF_TIME           (30 * MINUTES)
+#define MOTOR_MIN_OFF_TIME           (20 * MINUTES)
 #define COMPRESSOR_BEEP_ALWAYS
 #define COMPRESSOR_BEEP_TIME         5
-
 
 #define PIN_SENSORS 5
 #define TEMPERATURE_PRECISION 11

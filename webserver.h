@@ -95,7 +95,7 @@ void serverIndex() {
   html += "<tr><td>Compressor:</td><td>";
   if (comprActive) {
     unsigned duration = uptime-lastMotorOnTime;
-    html += String("ACTIVE ") + duration; 
+    html += String("ACTIVE ") + toHumanReadableTime(duration/1000); 
   } else {
     unsigned long motorOffDuration = uptime - lastMotorOffTime;
     const String waited = toHumanReadableTime(motorOffDuration/1000);
@@ -174,6 +174,10 @@ void serverTestaction() {
   } else if (submit=="COFF") {      
     setCompressor(0, false);
     serverRedirect("COMPRESSOR OFF", "/test.html", 3);
+  } else if (submit == "WOFF") {
+    serverRedirect("WIFI OFF", "/test.html", 3);
+    delay(500);
+    WiFi.disconnect(false, false);
   } else {
     serverRedirect(String("UNKNOWN ACTION ") + submit, "/test.html", 5);
   }
@@ -330,10 +334,11 @@ void serverTestpage() {
   html += "<br/><br/>\n";
   html += "confirm: <input type=\"text\" name=\"confirm\"><br/><br/>\n";
   html += "<input type=\"submit\" name=\"RST\"  value=\"RST\">\n";
-  html += "<input type=\"submit\" name=\"CON\"  value=\"FON\">\n";
-  html += "<input type=\"submit\" name=\"COFF\" value=\"FOFF\">\n";
-  html += "<input type=\"submit\" name=\"FON\"  value=\"CON\">\n";
-  html += "<input type=\"submit\" name=\"FOFF\" value=\"COFF\">\n";
+  html += "<input type=\"submit\" name=\"CON\"  value=\"CON\">\n";
+  html += "<input type=\"submit\" name=\"COFF\" value=\"COFF\">\n";
+  html += "<input type=\"submit\" name=\"FON\"  value=\"FON\">\n";
+  html += "<input type=\"submit\" name=\"FOFF\" value=\"FOFF\">\n";
+  html += "<input type=\"submit\" name=\"WOFF\" value=\"WOFF\">\n";
   html += "</form>\n";
   html += "</center><br/><br/>\n";
   html += "<center><a href=\"/index.html\">[BACK]</a></center>\n";

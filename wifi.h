@@ -108,12 +108,13 @@ void setupWifi(boolean verbose) {
     WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
   }
 
-  digitalWrite(PIN_BUZZER, LOW);
+  digitalWrite(PIN_BUZZER, HIGH);
   for (int retries = 0; WiFi.status() != WL_CONNECTED && retries < 10*WIFI_SEARCH_TIME; retries++) {
     if (verbose) {
       setLed(  0); beep(10);
       setLed(255); delay(90);
     } else {
+      beep(5);
       delay(100);
     }
 
